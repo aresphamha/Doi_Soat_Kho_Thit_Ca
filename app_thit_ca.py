@@ -136,7 +136,7 @@ def load_data():
     qty_cols = ['Số lượng chuyển', 'Số lượng nhận', 'Chênh lệch', 'Qty_N', 'Qty_O', 'Qty_P', 'Hao hụt', 'BS_ST', 'Kho_Rau', 'CXD']
     
     # Clean money columns
-    for col in ['Tổng GT', 'Tổng hao hụt', 'Tổng ST', 'Tổng kho Thịt Cá', 'KHO THỊT CÁ', 'Tổng chưa xác định']:
+    for col in ['Tổng GT', 'Tổng hao hụt', 'Tổng ST', 'Tổng kho Thịt Cá', 'Tổng chưa xác định']:
         matched_cols = [c for c in df.columns if col in c]
         for c in matched_cols:
             df[c] = df[c].apply(clean_val)
