@@ -115,7 +115,8 @@ def load_data():
             try:
                 response = requests.get(url, timeout=30, verify=False)
                 response.raise_for_status()
-                content = response.content.decode('utf-8-sig', errors='ignore')
+                # Google Sheets CSV exports are UTF-8 encoded
+                content = response.content.decode('utf-8')
                 return pd.read_csv(io.StringIO(content), skiprows=1, dtype=str)
             except Exception as e:
                 if i == max_retries - 1:
@@ -123,17 +124,7 @@ def load_data():
                 time.sleep(2)
                 
     df = read_csv_with_retry(url_meat_fish)
-    # Clean up column names encoding (handle potential latin1/mojibake representation from export)
-    cleaned_cols = []
-    for c in df.columns:
-        c_str = str(c).strip()
-        try:
-            # Convert raw mojibake if present
-            c_clean = c_str.encode('latin1').decode('utf-8').strip()
-            cleaned_cols.append(c_clean)
-        except:
-            cleaned_cols.append(c_str)
-    df.columns = cleaned_cols
+    df.columns = [str(c).strip() for c in df.columns]
     
     # Rename columns to standard ones if needed
     df.rename(columns={
@@ -146,7 +137,7 @@ def load_data():
     
     # Clean money columns
     for col in ['Tổng GT', 'Tổng hao hụt', 'Tổng ST', 'Tổng kho Thịt Cá', 'KHO THỊT CÁ', 'Tổng chưa xác định']:
-        matched_cols = [c for c in df.columns if col in c or c.startswith('Tổng') or c.startswith('Tá»•ng') or c.startswith('T\xc3\xb4ng')]
+        matched_cols = [c for c in df.columns if col in c]
         for c in matched_cols:
             df[c] = df[c].apply(clean_val)
             
@@ -170,8 +161,8 @@ def load_data():
     df['Qty_P'] = df['SL chênh lệch CXD'].apply(clean_qty) if 'SL chênh lệch CXD' in df.columns else 0.0
     
     # Kết hợp các cột tổng chênh lệch
-    col_total_kho = [c for c in df.columns if 'kho Thịt Cá' in c or 'kho thịt cá' in c or 'KHO THỊT CÁ' in c or 'kho Th' in c][0]
-    col_total_cxd = [c for c in df.columns if 'chưa xác định' in c or 'chưa xác' in c][0]
+    col_total_kho = [c for c in df.columns if 'Tổng kho Thịt Cá' in c or 'Tổng kho thịt cá' in c][0]
+    col_total_cxd = [c for c in df.columns if 'Tổng chưa xác định' in c or 'chưa xác định' in c][0]
     
     df['Hao hụt'] = np.where(df['LyDo_HaoHut'].str.contains('hao hụt'), df['Qty_N'], 0)
     df['BS_ST'] = np.where(df['LyDo_SieuThi'].str.contains('siêu thị'), df['Qty_O'], 0)
