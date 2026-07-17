@@ -792,14 +792,24 @@ with tab_main:
 
     # Process Dataframes
     pivot_ngay_sum = df_active.groupby('Ngày_str')[['Số lượng chuyển', 'Số lượng nhận', 'Chênh lệch', 'Tổng GT', 'Hao hụt', 'BS_ST', 'Kho_Rau', 'CXD']].sum()
-    pivot_ngay_count = df_active[df_active['Chênh lệch'].abs() > 0].groupby('Ngày_str').size().rename('SL line chênh lệch')
-    pivot_ngay = pivot_ngay_sum.join(pivot_ngay_count).fillna(0).reset_index()
+    pivot_ngay = pivot_ngay_sum.fillna(0).reset_index()
     
     pivot_ngay['Ngày_dt'] = pd.to_datetime(pivot_ngay['Ngày_str'], format='%d/%m/%Y', errors='coerce')
     pivot_ngay = pivot_ngay.sort_values(by='Ngày_dt').drop(columns=['Ngày_dt'])
 
+    # Tính phần trăm đã phân bổ / chênh lệch cho từng ngày
+    sum_dist = pivot_ngay['Hao hụt'] + pivot_ngay['BS_ST'] + pivot_ngay['Kho_Rau'] + pivot_ngay['CXD']
+    pct_vals = np.where(pivot_ngay['Chênh lệch'].abs() > 0, (sum_dist / pivot_ngay['Chênh lệch'].abs()) * 100, 0.0)
+    pivot_ngay['% Cột Tổng'] = [f"{v:.2f}%".replace('.', ',') for v in pct_vals]
+
     tong_row_ngay = pivot_ngay.sum(numeric_only=True).to_frame().T
     tong_row_ngay['Ngày_str'] = 'Tổng'
+    
+    # Tính phần trăm đã phân bổ / chênh lệch cho hàng Tổng
+    total_sum_dist = tong_row_ngay['Hao hụt'].iloc[0] + tong_row_ngay['BS_ST'].iloc[0] + tong_row_ngay['Kho_Rau'].iloc[0] + tong_row_ngay['CXD'].iloc[0]
+    total_cl = abs(tong_row_ngay['Chênh lệch'].iloc[0])
+    total_pct = (total_sum_dist / total_cl) * 100 if total_cl > 0 else 0.0
+    tong_row_ngay['% Cột Tổng'] = f"{total_pct:.2f}%".replace('.', ',')
 
     pivot_ngay.rename(columns={
         'Tổng GT': 'Giá trị chênh lệch (VNĐ)',
