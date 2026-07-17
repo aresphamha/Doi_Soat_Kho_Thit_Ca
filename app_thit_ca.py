@@ -31,8 +31,8 @@ def display_df_with_download(styled_df, filename, height=None):
 st.title("🥩 Báo Cáo Đối Soát Kho Thịt Cá")
 st.markdown("Dữ liệu tự động cập nhật từ Hệ thống Google Sheets")
 
-# Hàm làm sạch số liệu thông minh (Xử lý lẫn lộn định dạng Anh/Việt)
-def clean_number(x):
+# Hàm làm sạch số lượng chênh lệch (Đơn vị nhỏ: cái, kg, hộp)
+def clean_qty(x):
     if pd.isna(x) or x == '':
         return 0.0
     if isinstance(x, (int, float)):
@@ -41,35 +41,63 @@ def clean_number(x):
         x = x.strip()
         if x == '':
             return 0.0
-        num_dots = x.count('.')
-        num_commas = x.count(',')
-        
-        if num_dots > 0 and num_commas > 0:
-            last_dot = x.rfind('.')
-            last_comma = x.rfind(',')
-            if last_comma > last_dot: # Format VN: 1.234,50
-                x = x.replace('.', '').replace(',', '.')
-            else: # Format EN: 1,234.50
-                x = x.replace(',', '')
-        elif num_commas > 0:
-            parts = x.split(',')
-            if num_commas > 1:
-                x = x.replace(',', '')
-            else:
-                x = x.replace(',', '.') # VN format: comma is decimal
-        elif num_dots > 0:
+        # Ở cột số lượng, dấu phẩy thường là phân cách thập phân (VD: 5,5 -> 5.5) hoặc dấu chấm cũng vậy (VD: -1.000 -> -1.0)
+        # Không có số lượng hàng nghìn trên 1 dòng ở kho thịt cá, nên ta quy về dạng chuẩn
+        x = x.replace(',', '.')
+        # Nếu có nhiều dấu chấm (lỗi định dạng), chỉ giữ lại dấu chấm cuối cùng
+        if x.count('.') > 1:
             parts = x.split('.')
-            if num_dots > 1:
-                x = x.replace('.', '')
-            else:
-                if len(parts[1]) == 3 and parts[0] not in ['0', '-0']:
-                    x = x.replace('.', '') # VD: 16.000 -> 16000
-                else:
-                    pass # VD: 5.5 -> 5.5
+            x = "".join(parts[:-1]) + "." + parts[-1]
     try:
         return float(x)
     except:
         return 0.0
+
+# Hàm làm sạch giá trị tiền tệ (Đơn vị lớn: VNĐ)
+def clean_val(x):
+    if pd.isna(x) or x == '':
+        return 0.0
+    if isinstance(x, (int, float)):
+        return float(x)
+    if isinstance(x, str):
+        x = x.strip()
+        if x == '':
+            return 0.0
+        # Xử lý tiền tệ VNĐ (VD: -2.045.634 hoặc -2,045,634.00 hoặc -13.914.047,04)
+        num_dots = x.count('.')
+        num_commas = x.count(',')
+        if num_dots > 0 and num_commas > 0:
+            last_dot = x.rfind('.')
+            last_comma = x.rfind(',')
+            if last_comma > last_dot: # Định dạng VN: 1.234.567,89
+                x = x.replace('.', '').replace(',', '.')
+            else: # Định dạng EN: 1,234,567.89
+                x = x.replace(',', '')
+        elif num_dots > 1: # Nhiều dấu chấm: 1.234.567 -> bỏ chấm
+            x = x.replace('.', '')
+        elif num_commas > 1: # Nhiều dấu phẩy: 1,234,567 -> bỏ phẩy
+            x = x.replace(',', '')
+        elif num_dots == 1:
+            # Nếu chỉ có 1 dấu chấm, xem nó là thập phân hay hàng nghìn (VD: -13914047.04 hay 16.000 VNĐ)
+            parts = x.split('.')
+            if len(parts[1]) == 3 and parts[0] not in ['0', '-0']:
+                x = x.replace('.', '') # 16.000 -> 16000 VNĐ
+            else:
+                pass # 12.5 -> 12.5
+        elif num_commas == 1:
+            parts = x.split(',')
+            if len(parts[1]) == 3 and parts[0] not in ['0', '-0']:
+                x = x.replace(',', '') # 16,000 -> 16000 VNĐ
+            else:
+                x = x.replace(',', '.') # 12,5 -> 12.5
+    try:
+        return float(x)
+    except:
+        return 0.0
+
+def clean_number(x):
+    # Hàm dự phòng giữ nguyên tương thích ngược
+    return clean_val(x)
 
 # HÀM XỬ LÝ SỐ AN TOÀN CHO BÁO CÁO
 def to_numeric(series):
@@ -95,7 +123,17 @@ def load_data():
                 time.sleep(2)
                 
     df = read_csv_with_retry(url_meat_fish)
-    df.columns = [str(c).strip() for c in df.columns]
+    # Clean up column names encoding (handle potential latin1/mojibake representation from export)
+    cleaned_cols = []
+    for c in df.columns:
+        c_str = str(c).strip()
+        try:
+            # Convert raw mojibake if present
+            c_clean = c_str.encode('latin1').decode('utf-8').strip()
+            cleaned_cols.append(c_clean)
+        except:
+            cleaned_cols.append(c_str)
+    df.columns = cleaned_cols
     
     # Rename columns to standard ones if needed
     df.rename(columns={
@@ -104,14 +142,17 @@ def load_data():
     }, inplace=True)
     
     # Clean numeric columns
-    for col in ['Số lượng chuyển', 'Số lượng nhận', 'Chênh lệch', 'Tổng GT', 'Tổng hao hụt', 'Tổng ST', 'Tổng kho Thá»‹t CÃ¡', 'TÃ\x94NG KHO THá»\x8aT CÃ\x81', 'Tá»\x95ng kho Thá»‹t CÃ¡', 'Tổng chưa xác định', 'Tá»•ng chÆ°a xÃ¡c Ä‘á»‹nh']:
-        matched_cols = [c for c in df.columns if col in c or c.startswith('Tổng') or c.startswith('Tá»•ng')]
+    qty_cols = ['Số lượng chuyển', 'Số lượng nhận', 'Chênh lệch', 'Qty_N', 'Qty_O', 'Qty_P', 'Hao hụt', 'BS_ST', 'Kho_Rau', 'CXD']
+    
+    # Clean money columns
+    for col in ['Tổng GT', 'Tổng hao hụt', 'Tổng ST', 'Tổng kho Thịt Cá', 'KHO THỊT CÁ', 'Tổng chưa xác định']:
+        matched_cols = [c for c in df.columns if col in c or c.startswith('Tổng') or c.startswith('Tá»•ng') or c.startswith('T\xc3\xb4ng')]
         for c in matched_cols:
-            df[c] = df[c].apply(clean_number)
+            df[c] = df[c].apply(clean_val)
             
-    df['Số lượng chuyển'] = df['Số lượng chuyển'].apply(clean_number)
-    df['Số lượng nhận'] = df['Số lượng nhận'].apply(clean_number)
-    df['Chênh lệch'] = df['Chênh lệch'].apply(clean_number)
+    df['Số lượng chuyển'] = df['Số lượng chuyển'].apply(clean_qty)
+    df['Số lượng nhận'] = df['Số lượng nhận'].apply(clean_qty)
+    df['Chênh lệch'] = df['Chênh lệch'].apply(clean_qty)
     
     if 'Chi nhánh nhận' in df.columns:
         df['Chi nhánh nhận'] = df['Chi nhánh nhận'].astype(str).str.replace(',', '.', regex=False)
@@ -120,17 +161,17 @@ def load_data():
     df['LyDo_HaoHut'] = df['Hao hụt'].astype(str).str.strip().str.lower()
     df['LyDo_SieuThi'] = df['Siêu thị'].astype(str).str.strip().str.lower()
     
-    col_kho = [c for c in df.columns if 'KHO TH' in c or 'kho th' in c or 'Kho th' in c][0]
+    col_kho = [c for c in df.columns if 'KHO THỊT CÁ' in c or 'kho thịt cá' in c or 'Kho thịt cá' in c or 'KHO TH' in c][0]
     df['LyDo_Kho'] = df[col_kho].astype(str).str.strip().str.lower()
     df['LyDo_Loi'] = df['Lỗi'].astype(str).str.strip().str.lower() if 'Lỗi' in df.columns else ''
     
-    df['Qty_N'] = df['Hạo hụt tự nhiên'].apply(clean_number) if 'Hạo hụt tự nhiên' in df.columns else df['Tổng hao hụt']
-    df['Qty_O'] = df['SL trả tồn về ST'].apply(clean_number) if 'SL trả tồn về ST' in df.columns else df['Tổng ST']
-    df['Qty_P'] = df['SL chênh lệch CXD'].apply(clean_number) if 'SL chênh lệch CXD' in df.columns else 0.0
+    df['Qty_N'] = df['Hạo hụt tự nhiên'].apply(clean_qty) if 'Hạo hụt tự nhiên' in df.columns else df['Tổng hao hụt']
+    df['Qty_O'] = df['SL trả tồn về ST'].apply(clean_qty) if 'SL trả tồn về ST' in df.columns else df['Tổng ST']
+    df['Qty_P'] = df['SL chênh lệch CXD'].apply(clean_qty) if 'SL chênh lệch CXD' in df.columns else 0.0
     
     # Kết hợp các cột tổng chênh lệch
-    col_total_kho = [c for c in df.columns if 'kho Th' in c or 'kho th' in c or 'KHO TH' in c][0]
-    col_total_cxd = [c for c in df.columns if 'chưa xác' in c or 'chÆ°a xÃ¡c' in c][0]
+    col_total_kho = [c for c in df.columns if 'kho Thịt Cá' in c or 'kho thịt cá' in c or 'KHO THỊT CÁ' in c or 'kho Th' in c][0]
+    col_total_cxd = [c for c in df.columns if 'chưa xác định' in c or 'chưa xác' in c][0]
     
     df['Hao hụt'] = np.where(df['LyDo_HaoHut'].str.contains('hao hụt'), df['Qty_N'], 0)
     df['BS_ST'] = np.where(df['LyDo_SieuThi'].str.contains('siêu thị'), df['Qty_O'], 0)
@@ -139,18 +180,13 @@ def load_data():
     df['Kho_Rau'] = np.where(df['LyDo_Kho'].str.contains('kho thịt cá'), df['Qty_P'], 0)
     df['CXD'] = np.where(df['LyDo_Kho'].str.contains('chưa xác định'), df['Qty_P'], 0)
     
-    df['Tổng kho rau'] = df[col_total_kho].apply(clean_number)
-    df['Tổng chưa xác định'] = df[col_total_cxd].apply(clean_number)
+    df['Tổng kho rau'] = df[col_total_kho].apply(clean_val)
+    df['Tổng chưa xác định'] = df[col_total_cxd].apply(clean_val)
     
-    # Parse dates (Google Sheets sends dates in MM/DD/YYYY format)
-    date_col = 'Ngành' if 'Ngành' in df.columns else ('NgÃ\xa0y' if 'NgÃ\xa0y' in df.columns else 'Ngày')
+    # Parse dates strictly (Google Sheets sends dates in MM/DD/YYYY format)
+    date_col = 'Ngày' if 'Ngày' in df.columns else ('Ngành' if 'Ngành' in df.columns else 'Ngày')
     
-    # Try parsing MM/DD/YYYY first since 07/08/2026 is Aug 7, not July 8
     df['Ngày_parsed'] = pd.to_datetime(df[date_col], format='%m/%d/%Y', errors='coerce')
-    idx_null = df['Ngày_parsed'].isna()
-    if idx_null.any():
-        df.loc[idx_null, 'Ngày_parsed'] = pd.to_datetime(df.loc[idx_null, date_col], format='%d/%m/%Y', errors='coerce')
-        
     df['Ngày_str'] = df['Ngày_parsed'].dt.strftime('%d/%m/%Y')
     df['Ngày'] = df['Ngày_parsed']
     df = df[df['Ngày_parsed'].notna()]
