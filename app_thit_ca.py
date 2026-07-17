@@ -156,7 +156,8 @@ def load_data():
     df['LyDo_Kho'] = df[col_kho].astype(str).str.strip().str.lower()
     df['LyDo_Loi'] = df['Lỗi'].astype(str).str.strip().str.lower() if 'Lỗi' in df.columns else ''
     
-    df['Qty_N'] = df['Hạo hụt tự nhiên'].apply(clean_qty) if 'Hạo hụt tự nhiên' in df.columns else df['Tổng hao hụt']
+    col_hao_hut_qty = 'Hạo hụt tự nhiê' if 'Hạo hụt tự nhiê' in df.columns else ('Hạo hụt tự nhiên' if 'Hạo hụt tự nhiên' in df.columns else None)
+    df['Qty_N'] = df[col_hao_hut_qty].apply(clean_qty) if col_hao_hut_qty else df['Tổng hao hụt']
     df['Qty_O'] = df['SL trả tồn về ST'].apply(clean_qty) if 'SL trả tồn về ST' in df.columns else df['Tổng ST']
     df['Qty_P'] = df['SL chênh lệch CXD'].apply(clean_qty) if 'SL chênh lệch CXD' in df.columns else 0.0
     
@@ -200,6 +201,172 @@ try:
 except Exception as e:
     st.error(f"Lỗi tải dữ liệu: {e}")
     st.stop()
+# HÀM TÍNH TOÁN NĂNG SUẤT DAILY MỚI
+def calculate_daily_metrics(data, group_by_col='CLV2'):
+    if data.empty:
+        return pd.DataFrame(columns=[
+            group_by_col, 'SL chuyển', 'SL chênh lệch', 'GT chênh lệch', 
+            'SL ST chênh lệch', 'SL line chênh lệch', 'SL line hao hụt', 
+            'SL line đã xử lý', 'Tỷ lệ line đã xử lý', 'Số lượng hao hụt', 
+            'GT hao hụt', 'Tỷ lệ hao hụt', 'SL bs ST', 'GT bs ST', 
+            'SL bs kho rau', 'GT bs kho rau', 'Đang xử lý', 'GT Đang xử lý', 
+            'Chưa xử lý', 'GT Chưa xử lý', 'Không xử lý (WRITE OFF)', 'Giá trị WRITE OFF',
+            'Lỗi ST (Nhập thiếu)', 'Lỗi ST (Sai QT)', 'GT Lỗi ST (Nhập thiếu)', 'GT Lỗi ST (Sai QT)'
+        ])
+    
+    df = data.copy()
+    df['SL_chuyen_num'] = to_numeric(df['Số lượng chuyển'])
+    df['CL_num'] = to_numeric(df['Chênh lệch'])
+    df['GT_num'] = to_numeric(df['Tổng GT'])
+    df['HH_qty'] = to_numeric(df['Hao hụt'])
+    df['HH_val'] = to_numeric(df['Tổng hao hụt'])
+    df['ST_qty'] = to_numeric(df['BS_ST'])
+    df['ST_val'] = to_numeric(df['Tổng ST'])
+    df['Kho_qty'] = to_numeric(df['Kho_Rau'])
+    df['Kho_val'] = to_numeric(df['Tổng kho rau'])
+    df['CXD_qty'] = to_numeric(df['CXD'])
+    df['CXD_val'] = to_numeric(df['Tổng chưa xác định'])
+    
+    df['ST_NhapThieu_qty'] = to_numeric(df['ST_NhapThieu']) if 'ST_NhapThieu' in df.columns else 0.0
+    df['ST_SaiQT_qty'] = to_numeric(df['ST_SaiQT']) if 'ST_SaiQT' in df.columns else 0.0
+    
+    price_col = 'Giá nhập \n( -VAT)' if 'Giá nhập \n( -VAT)' in df.columns else None
+    if price_col:
+        df['ST_NhapThieu_val'] = df['ST_NhapThieu_qty'] * to_numeric(df[price_col])
+        df['ST_SaiQT_val'] = df['ST_SaiQT_qty'] * to_numeric(df[price_col])
+    else:
+        df['ST_NhapThieu_val'] = 0.0
+        df['ST_SaiQT_val'] = 0.0
+        
+    df['Xuly_clean'] = df['Xử lý'].fillna('').astype(str).str.strip().str.lower()
+    
+    groups = df.groupby(group_by_col, dropna=False)
+    rows = []
+    
+    for g_name, g_df in groups:
+        cl_df = g_df[g_df['CL_num'].abs() > 0]
+        sl_chuyen = g_df['SL_chuyen_num'].sum()
+        sl_cl = g_df['CL_num'].sum()
+        gt_cl = g_df['GT_num'].sum()
+        
+        sl_st_cl = cl_df['ID ST'].nunique()
+        sl_line_cl = len(cl_df)
+        sl_line_hh = len(g_df[g_df['HH_qty'].abs() > 0])
+        
+        done_df = g_df[g_df['Xuly_clean'].str.contains('hoàn thành')]
+        sl_line_done = len(done_df)
+        tyle_line_done = f"{(sl_line_done / sl_line_cl * 100):.2f}%" if sl_line_cl > 0 else "0.00%"
+        
+        sl_hh = g_df['HH_qty'].sum()
+        gt_hh = g_df['HH_val'].sum()
+        tyle_hh = f"{(sl_hh / sl_chuyen * 100):.2f}%" if sl_chuyen > 0 else "0.00%"
+        
+        sl_bs_st = g_df['ST_qty'].sum()
+        gt_bs_st = g_df['ST_val'].sum()
+        sl_bs_kho = g_df['Kho_qty'].sum()
+        gt_bs_kho = g_df['Kho_val'].sum()
+        
+        sl_st_nhap = g_df['ST_NhapThieu_qty'].sum()
+        sl_st_sai = g_df['ST_SaiQT_qty'].sum()
+        gt_st_nhap = g_df['ST_NhapThieu_val'].sum()
+        gt_st_sai = g_df['ST_SaiQT_val'].sum()
+        
+        # Đang xử lý
+        dang_xl_df = g_df[g_df['Xuly_clean'].str.contains('đang chuyển') | g_df['Xuly_clean'].str.contains('đang xử lý')]
+        sl_dang_xl = dang_xl_df['CL_num'].sum()
+        gt_dang_xl = dang_xl_df['GT_num'].sum()
+        
+        # Không xử lý (Write Off)
+        write_off_df = g_df[g_df['Xuly_clean'].str.contains('không xử lý') | g_df['Xuly_clean'].str.contains('write off')]
+        sl_write_off = write_off_df['CL_num'].sum()
+        gt_write_off = write_off_df['GT_num'].sum()
+        
+        # Chưa xử lý
+        chua_xl_df = g_df[~g_df['Xuly_clean'].str.contains('hoàn thành') & 
+                          ~g_df['Xuly_clean'].str.contains('đang chuyển') & 
+                          ~g_df['Xuly_clean'].str.contains('đang xử lý') & 
+                          ~g_df['Xuly_clean'].str.contains('không xử lý') & 
+                          ~g_df['Xuly_clean'].str.contains('write off')]
+        sl_chua_xl = chua_xl_df['CL_num'].sum()
+        gt_chua_xl = chua_xl_df['GT_num'].sum()
+        
+        row = {
+            group_by_col: g_name,
+            'SL chuyển': sl_chuyen,
+            'SL chênh lệch': sl_cl,
+            'GT chênh lệch': gt_cl,
+            'SL ST chênh lệch': sl_st_cl,
+            'SL line chênh lệch': sl_line_cl,
+            'SL line hao hụt': sl_line_hh,
+            'SL line đã xử lý': sl_line_done,
+            'Tỷ lệ line đã xử lý': tyle_line_done,
+            'Số lượng hao hụt': sl_hh,
+            'GT hao hụt': gt_hh,
+            'Tỷ lệ hao hụt': tyle_hh,
+            'SL bs ST': sl_bs_st,
+            'GT bs ST': gt_bs_st,
+            'SL bs kho rau': sl_bs_kho,
+            'GT bs kho rau': gt_bs_kho,
+            'Đang xử lý': sl_dang_xl,
+            'GT Đang xử lý': gt_dang_xl,
+            'Chưa xử lý': sl_chua_xl,
+            'GT Chưa xử lý': gt_chua_xl,
+            'Không xử lý (WRITE OFF)': sl_write_off,
+            'Giá trị WRITE OFF': gt_write_off,
+            'Lỗi ST (Nhập thiếu)': sl_st_nhap,
+            'Lỗi ST (Sai QT)': sl_st_sai,
+            'GT Lỗi ST (Nhập thiếu)': gt_st_nhap,
+            'GT Lỗi ST (Sai QT)': gt_st_sai
+        }
+        rows.append(row)
+        
+    return pd.DataFrame(rows)
+
+# HÀM HIỂN THỊ BẢNG DAILY
+def display_daily_table(df, cols, title_prefix, group_by_col='CLV2'):
+    if df.empty:
+        st.info("Không có dữ liệu.")
+        return
+    df_to_show = df.copy()
+    for col in cols:
+        if col not in df_to_show.columns:
+            df_to_show[col] = 0.0
+    df_to_show = df_to_show[cols]
+    format_custom_table_with_total(df_to_show, group_by_col, title_prefix)
+
+# HÀM TÍNH TỔNG QUAN DAILY DẠNG TEXT
+def compute_daily_summary(df, date_str):
+    if df.empty:
+        return None
+    
+    cl_qty = to_numeric(df['Chênh lệch'])
+    gt_val = to_numeric(df['Tổng GT'])
+    
+    total_items = cl_qty.abs().sum()
+    total_value = gt_val.abs().sum()
+    
+    xuly_clean = df['Xử lý'].fillna('').astype(str).str.strip().str.lower()
+    df_done = df[xuly_clean.str.contains('hoàn thành')]
+    
+    ret_qty = to_numeric(df_done['Kho_Rau']).abs().sum()
+    bs_qty = to_numeric(df_done['BS_ST']).abs().sum()
+    lost_qty = to_numeric(df_done['Hao hụt']).abs().sum()
+    
+    processed_qty = ret_qty + bs_qty + lost_qty
+    remaining_qty = total_items - processed_qty
+    if remaining_qty < 0:
+        remaining_qty = 0.0
+        
+    return {
+        'date': date_str,
+        'total_items': int(total_items),
+        'total_value': total_value,
+        'processed': int(processed_qty),
+        'return': int(ret_qty),
+        'bs': int(bs_qty),
+        'lost': int(lost_qty),
+        'remaining': int(remaining_qty)
+    }
 
 # Insight Generators y hệt bên Kho Rau
 def generate_insights(df_raw, table_type, df_grouped=None, df_metrics=None, date_str=None):
