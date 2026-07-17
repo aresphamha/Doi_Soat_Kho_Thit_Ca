@@ -96,8 +96,8 @@ def load_data():
                 
     df = read_csv_with_retry(url_meat_fish)
     
-    # Strip spaces from column names
-    df.columns = [str(c).encode('latin1').decode('utf-8', errors='ignore').strip() for c in df.columns]
+    # Strip spaces from column names and handle encoding
+    df.columns = [str(c).strip() for c in df.columns]
     
     # Rename columns to standard ones if needed
     df.rename(columns={
