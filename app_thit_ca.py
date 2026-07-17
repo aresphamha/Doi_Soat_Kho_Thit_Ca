@@ -142,14 +142,16 @@ def load_data():
     df['Tổng kho rau'] = df[col_total_kho].apply(clean_number)
     df['Tổng chưa xác định'] = df[col_total_cxd].apply(clean_number)
     
-    # Parse dates
+    # Parse dates (Google Sheets sends dates in MM/DD/YYYY format)
     date_col = 'Ngành' if 'Ngành' in df.columns else ('NgÃ\xa0y' if 'NgÃ\xa0y' in df.columns else 'Ngày')
-    df['Ngày_parsed'] = pd.to_datetime(df[date_col], format='%d/%m/%Y', errors='coerce')
+    
+    # Try parsing MM/DD/YYYY first since 07/08/2026 is Aug 7, not July 8
+    df['Ngày_parsed'] = pd.to_datetime(df[date_col], format='%m/%d/%Y', errors='coerce')
     idx_null = df['Ngày_parsed'].isna()
     if idx_null.any():
-        df.loc[idx_null, 'Ngày_parsed'] = pd.to_datetime(df.loc[idx_null, date_col], format='%m/%d/%Y', errors='coerce')
+        df.loc[idx_null, 'Ngày_parsed'] = pd.to_datetime(df.loc[idx_null, date_col], format='%d/%m/%Y', errors='coerce')
         
-    df['Ngày_str'] = df['Ngày_parsed'].dt.strftime('%d/%m/%Y').fillna(df[date_col])
+    df['Ngày_str'] = df['Ngày_parsed'].dt.strftime('%d/%m/%Y')
     df['Ngày'] = df['Ngày_parsed']
     df = df[df['Ngày_parsed'].notna()]
     
@@ -747,7 +749,9 @@ with tab_main:
         display_df_with_download(pivot_clv2_renamed.style.format(format_vn).map(color_red_for_chenhlech, subset=[c for c in pivot_clv2_renamed.columns if 'Chênh lệch' in c[1]]), "Tong_Hop_CLV2")
 
     st.write("---")
-    sorted_dates = [d for d in pivot_ngay['Ngày_str'] if d != 'Tổng']
+    # Sort dates chronologically
+    sorted_dates_dt = sorted(pd.to_datetime(pivot_ngay['Ngày_str'], format='%d/%m/%Y', errors='coerce').dropna().unique())
+    sorted_dates = [d.strftime('%d/%m/%Y') for d in sorted_dates_dt if d.strftime('%d/%m/%Y') != 'Tổng']
     dates = ["Tất cả các ngày"] + sorted_dates
 
     # 4. CHI TIẾT SỐ LƯỢNG & GIÁ TRỊ THEO NHÓM HÀNG (CLV4)
@@ -878,7 +882,10 @@ with tab_main:
 with tab_daily:
     st.header("Báo Cáo Năng Suất Chi Tiết Mỗi Ngày")
     
-    unique_daily_dates = df_all.sort_values(by='Ngày')['Ngày_str'].dropna().unique().tolist()
+    # Sort dates chronologically
+    unique_daily_dates_dt = sorted(pd.to_datetime(df_all['Ngày_str'], format='%d/%m/%Y', errors='coerce').dropna().unique())
+    unique_daily_dates = [d.strftime('%d/%m/%Y') for d in unique_daily_dates_dt]
+    
     if unique_daily_dates:
         options = ["Tất cả các ngày"] + unique_daily_dates
         selected_daily_date = st.selectbox("📅 Chọn ngày báo cáo (Daily):", options, index=len(options)-1, key="daily_selectbox")
